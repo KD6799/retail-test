@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
+const { generateGrid, isValidBounds, isWithinBounds } = require('./lib/geography');
 
 const app = express();
 
@@ -37,27 +38,6 @@ app.get('/', (req, res) => {
 app.get('/health', (req, res) => {
     res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
-
-// Generate grid
-function generateGrid(bounds, spacingKm, centerLat) {
-    const latDegPerKm = 1 / 110.574;
-    const lngDegPerKm = 1 / (111.320 * Math.cos(centerLat * Math.PI / 180));
-    
-    const latStep = spacingKm * latDegPerKm;
-    const lngStep = spacingKm * lngDegPerKm;
-    
-    const grid = [];
-    let lat = bounds.min_lat;
-    while (lat <= bounds.max_lat) {
-        let lng = bounds.min_lng;
-        while (lng <= bounds.max_lng) {
-            grid.push({ lat, lng });
-            lng += lngStep;
-        }
-        lat += latStep;
-    }
-    return grid;
-}
 
 // Fetch places with retry
 async function fetchPlaces(lat, lng, keyword, radius, apiKey, retries = 3) {
@@ -181,6 +161,7 @@ async function runScrapingInBackground(sessionId, brands, cityBounds, cityCenter
         const totalOperations = brands.length * grid.length;
         let currentOperation = 0;
         let totalApiCalls = 0;
+        let rejectedOutOfBounds = 0;
         // REMOVED: Global seenPlaceIds - was causing massive data loss!
 
         console.log(`Grid: ${grid.length} points, Total ops: ${totalOperations}`);
@@ -227,6 +208,14 @@ async function runScrapingInBackground(sessionId, brands, cityBounds, cityCenter
                     // Collect unique results PER BRAND (not globally!)
                     for (const place of places) {
                         const placeId = place.place_id;
+                        const latitude = place.geometry?.location?.lat;
+                        const longitude = place.geometry?.location?.lng;
+
+                        // Nearby Search radius biases results; it is not a geographic fence.
+                        if (!isWithinBounds(latitude, longitude, cityBounds)) {
+                            rejectedOutOfBounds++;
+                            continue;
+                        }
                         
                         // Only skip if we've seen this place for THIS brand
                         if (!placeId || brandSeenPlaceIds.has(placeId)) {
@@ -242,8 +231,8 @@ async function runScrapingInBackground(sessionId, brands, cityBounds, cityCenter
                             gmaps_category: place.types ? place.types[0] : '',
                             name: place.name || '',
                             address: place.vicinity || '',
-                            latitude: place.geometry?.location?.lat || null,
-                            longitude: place.geometry?.location?.lng || null,
+                            latitude,
+                            longitude,
                             business_status: place.business_status || '',
                             gmaps_url: `https://www.google.com/maps/place/?q=place_id=${placeId}`,
                             place_id: placeId,
@@ -330,7 +319,7 @@ async function runScrapingInBackground(sessionId, brands, cityBounds, cityCenter
             })
             .eq('session_id', sessionId);
 
-        console.log(`✅ Scraping complete! Session: ${sessionId}, Results: ${count}`);
+        console.log(`✅ Scraping complete! Session: ${sessionId}, Results saved inside bounds: ${count}, Results rejected outside bounds or without coordinates: ${rejectedOutOfBounds}`);
 
     } catch (error) {
         console.error('❌ Scraping error:', error);
@@ -353,6 +342,15 @@ app.post('/api/scrape', async (req, res) => {
         return res.status(500).json({ 
             error: 'Supabase not configured' 
         });
+    }
+
+    if (!Array.isArray(brands) || brands.length === 0 || !isValidBounds(cityBounds) ||
+        !Array.isArray(cityCenter) || cityCenter.length < 2 ||
+        !Number.isFinite(cityCenter[0]) || !Number.isFinite(cityCenter[1]) ||
+        cityCenter[0] < cityBounds.min_lat || cityCenter[0] > cityBounds.max_lat ||
+        cityCenter[1] < cityBounds.min_lng || cityCenter[1] > cityBounds.max_lng ||
+        !apiKey || !sessionId) {
+        return res.status(400).json({ error: 'Invalid scrape request or city bounds' });
     }
 
     try {
