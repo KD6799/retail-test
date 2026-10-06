@@ -580,10 +580,6 @@
         center: [17.9784, 79.6005],
         bounds: { min_lat: 17.93, max_lat: 18.03, min_lng: 79.54, max_lng: 79.66 }
     },
-    "Devanahalli": {
-    center: [13.2489, 77.7189],
-    bounds: { min_lat: 13.2283, max_lat: 13.2676, min_lng: 77.6983, max_lng: 77.7340 }
-    },
     "Yamuna Nagar": {
         center: [30.1290, 77.2674],
         bounds: { min_lat: 30.08, max_lat: 30.18, min_lng: 77.21, max_lng: 77.33 }
@@ -839,9 +835,13 @@ const filteredCities = Object.keys(INDIAN_CITIES).filter(city =>
                 const latStep = gridSpacing * latDegPerKm;
                 const lngStep = gridSpacing * lngDegPerKm;
                 
-                const latPoints = Math.ceil((bounds.max_lat - bounds.min_lat) / latStep) + 1;
-                const lngPoints = Math.ceil((bounds.max_lng - bounds.min_lng) / lngStep) + 1;
-                const totalGridPoints = latPoints * lngPoints;
+                // Keep this loop identical to the backend grid generator.
+                let totalGridPoints = 0;
+                for (let lat = bounds.min_lat; lat <= bounds.max_lat; lat += latStep) {
+                    for (let lng = bounds.min_lng; lng <= bounds.max_lng; lng += lngStep) {
+                        totalGridPoints++;
+                    }
+                }
                 
                 // Estimate API calls
                 const minCalls = brands.length * totalGridPoints;
